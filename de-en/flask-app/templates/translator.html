@@ -1,0 +1,52 @@
+<!--{% extends "base.html" %}
+{% block title %}Translator{% endblock %}
+{% block content %} -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+    <meta charset="UTF-8">
+    <title>Translator</title>
+</head>
+<body style="margin-top:20; margin-left:20; margin-left:20; padding:0">
+
+	<br>
+	<br>
+
+	<div class="container">
+		<br>
+		<h1>Translator</h1>
+		<br>
+		<p><b>This web page allows you to translate a German sentence into an English sentence.</b></p>
+		<form action="#" method="post">
+			
+			<div class="form-group">
+			    <label for="exampleFormControlTextarea1">The German sentence:</label>
+			    <textarea class="form-control" id="exampleFormControlTextarea1" rows="3" cols="50" placeholder="Your German sentence please!" aria-label="The German sentence" name ="sentence" >{{sentence}}</textarea>
+			    
+		  	</div>
+			<input type="submit" value ="Submit" />
+			    
+		    
+		</form>
+
+		<br>
+		<br>
+		<form>	
+		  	<div class="form-group">
+			    <label for="exampleFormControlTextarea1">The English translation:</label>
+			    <textarea class="form-control" id="exampleFormControlTextarea1" rows="3" cols="50" placeholder="The English translation" aria-label="The English translation" >{{translation}}</textarea>
+			    <small id="passwordHelpBlock" class="form-text text-muted">with {{probability}} % confidence.</small>
+		  	</div>
+		</form>
+	</div>
+
+	<!--{% endblock %}-->
+
+	
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js" integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI" crossorigin="anonymous"></script>
+</body>
+</html>
