@@ -1,0 +1,19 @@
+#!/bin/bash
+
+export MODEL_PATH="/home/sven/Python/TensorFlow-Training/Text/Translator/${1}/beamsearch/000${2}"
+
+docker run -d --name serving_base tensorflow/serving
+
+mkdir empty
+
+docker cp empty serving_base:/models/translator
+
+docker cp $MODEL_PATH serving_base:/models/translator/0001
+
+docker commit --change "ENV MODEL_NAME translator" serving_base meinhardt4ai/translators:$1
+
+docker stop serving_base
+
+docker rm serving_base
+
+rmdir empty

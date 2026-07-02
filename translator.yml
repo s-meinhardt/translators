@@ -1,0 +1,49 @@
+version: '3.3'
+services:
+  web:
+    image: meinhardt4ai/translators:web_app
+    network_mode: 'host'
+    depends_on:
+      - detector
+      - de-en
+      - en-de
+      - de-fr
+      - fr-de
+      - en-fr
+      - fr-en
+    restart: unless-stopped
+  detector:
+    image: meinhardt4ai/translators:detector
+    ports:
+      - '8600:8501'
+    restart: unless-stopped
+  de-en:
+    image: meinhardt4ai/translators:de-en
+    ports:
+      - '8601:8501'
+    restart: unless-stopped
+  en-de:
+    image: meinhardt4ai/translators:en-de
+    ports:
+      - '8602:8501'
+    restart: unless-stopped
+  de-fr:
+    image: meinhardt4ai/translators:de-fr
+    ports:
+      - '8603:8501'
+    restart: unless-stopped
+  fr-de:
+    image: meinhardt4ai/translators:fr-de
+    ports:
+      - '8604:8501'
+    restart: unless-stopped
+  en-fr:
+    image: meinhardt4ai/translators:en-fr
+    ports:
+      - '8605:8501'
+    restart: unless-stopped
+  fr-en:
+    image: meinhardt4ai/translators:fr-en
+    ports:
+      - '8606:8501'
+    restart: unless-stopped
