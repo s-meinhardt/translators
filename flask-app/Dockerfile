@@ -9,4 +9,4 @@ RUN python -c "import nltk; nltk.download('punkt')"
 
 EXPOSE 5000
 
-ENTRYPOINT ["python", "translator_de_en.py"]
+ENTRYPOINT ["python", "translator.py"]

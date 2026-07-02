@@ -2,7 +2,6 @@ from flask import Flask, url_for, request, redirect, render_template, jsonify
 from markupsafe import escape
 
 import os
-import json
 import re
 import requests
 from math import log 
@@ -330,20 +329,6 @@ def De_translator():
 @app.route("/fr", methods = ["POST"])
 def Fr_translator():
 	return redirect(url_for("translator", output_language='French', text=request.form['text']), code=307)
-
-
-
-@app.route("/prediction", methods=["POST"])
-def predict():		
-	text = request.get_json()
-	if not isinstance(text, str):
-		return f'Input is of type {type(text)} which is not supported!'
-	input_language = detect_language(text)
-	translation, confidence, output_language = translate(text)				
-	return json.dumps({"translation" : translation, "confidence" : confidence, "input language": input_language, "output language": output_language})
-
- 
-
 
 
 
