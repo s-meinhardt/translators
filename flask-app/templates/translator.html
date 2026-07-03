@@ -1,55 +1,246 @@
-<!--{% extends "base.html" %}
-{% block title %}Translator{% endblock %}
-{% block content %} -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Translator</title>
+    <style>
+        :root {
+            --bg: #f3f5f9;
+            --surface: #ffffff;
+            --border: #dde3ec;
+            --text: #1c2333;
+            --text-muted: #5b667a;
+            --accent: #2f6fed;
+            --accent-hover: #245cd0;
+            --accent-soft: #e8effd;
+            --radius: 12px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .page {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 48px 24px 64px;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        header p {
+            margin: 8px 0 0;
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .card {
+            margin-top: 28px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 8px 24px rgba(28, 35, 51, 0.06);
+            overflow: hidden;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .toolbar-label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .segmented {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .segmented input[type="submit"] {
+            appearance: none;
+            border: none;
+            background: var(--surface);
+            color: var(--text);
+            font: inherit;
+            font-size: 0.95rem;
+            padding: 8px 20px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .segmented input[type="submit"] + input[type="submit"] {
+            border-left: 1px solid var(--border);
+        }
+
+        .segmented input[type="submit"]:hover {
+            background: var(--accent-soft);
+            color: var(--accent);
+        }
+
+        .segmented input[type="submit"].active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .segmented input[type="submit"]:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
+
+        .alert {
+            margin: 16px 20px 0;
+            padding: 10px 14px;
+            border: 1px solid #f3c6c6;
+            border-radius: 8px;
+            background: #fdf0f0;
+            color: #a13030;
+            font-size: 0.95rem;
+        }
+
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .panel + .panel {
+            border-left: 1px solid var(--border);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .panel-header label,
+        .panel-header .panel-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        .badge {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--accent);
+            background: var(--accent-soft);
+            border-radius: 999px;
+            padding: 2px 10px;
+            white-space: nowrap;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 260px;
+            resize: vertical;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            font: inherit;
+            font-size: 1rem;
+            color: var(--text);
+            background: var(--surface);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        textarea::placeholder { color: #9aa4b5; }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        textarea[readonly] {
+            background: #f8fafc;
+        }
+
+        @media (max-width: 760px) {
+            .page { padding: 24px 16px 48px; }
+            .panels { grid-template-columns: 1fr; }
+            .panel + .panel {
+                border-left: none;
+                border-top: 1px solid var(--border);
+            }
+            textarea { min-height: 180px; }
+        }
+    </style>
 </head>
-<body style="margin-top:20; margin-left:20; margin-left:20; padding:0">
+<body>
+    <div class="page">
+        <header>
+            <h1>Translator</h1>
+            <p>Translate text between German, English and French. The source language is detected automatically.</p>
+        </header>
 
-	<br>
-	<br>
+        <form action="/" method="post" class="card">
+            <div class="toolbar">
+                <span class="toolbar-label" id="target-label">Translate to</span>
+                <div class="segmented" role="group" aria-labelledby="target-label">
+                    <input type="submit" formaction="/en" value="English" id="english" class="{{ 'active' if output_language == 'English' }}"/>
+                    <input type="submit" formaction="/de" value="German" id="german" class="{{ 'active' if output_language == 'German' }}"/>
+                    <input type="submit" formaction="/fr" value="French" id="french" class="{{ 'active' if output_language == 'French' }}"/>
+                </div>
+            </div>
 
-	<div class="container">
-		<br>
-		<h1>Translator</h1>
-		<br>
-		<p><b>This web page allows you to translate text between German an English.</b></p>
-		<form action="/" method="post">
-			
-			<div class="form-group">
-			    <label for="exampleFormControlTextarea1">Your {{input_language}} text:</label>
-			    <textarea class="form-control" id="exampleFormControlTextarea1" rows="10" cols="50" placeholder="Your text please!" aria-label="The input text" name ="text" required>{{text}}</textarea>
-			    
-		  	</div>
-		  	<label for="english">Into which language shall I translate?</label><br>
-		  	<input type="submit" formaction="/en" value="English" id="english"/>
-			<input type="submit" formaction="/de" value="German" id="german"/>
-			<input type="submit" formaction="/fr" value="French" id="french"/>
-			    
-		    
-		</form>
+            {% if error %}
+            <div class="alert" role="alert">{{error}}</div>
+            {% endif %}
 
-		<br>
-		<br>
-		<form>	
-		  	<div class="form-group">
-			    <label for="exampleFormControlTextarea1">The {{output_language}} translation:</label>
-			    <textarea class="form-control" id="exampleFormControlTextarea1" rows="10" cols="50" placeholder="The translation" aria-label="The translation" >{{translation}}</textarea>
-			    <small id="passwordHelpBlock" class="form-text text-muted">with {{confidence}}% confidence.</small>
-		  	</div>
-		</form>
-	</div>
+            <div class="panels">
+                <div class="panel">
+                    <div class="panel-header">
+                        <label for="source-text">
+                            {% if input_language %}Detected: {{input_language}}{% else %}Your text{% endif %}
+                        </label>
+                    </div>
+                    <textarea id="source-text" name="text" placeholder="Type or paste your text here…" aria-label="The input text" required>{{text}}</textarea>
+                </div>
 
-	<!--{% endblock %}-->
-
-	
-
-<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
-<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js" integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI" crossorigin="anonymous"></script>
+                <div class="panel">
+                    <div class="panel-header">
+                        <label for="translated-text">
+                            {% if output_language %}{{output_language}} translation{% else %}Translation{% endif %}
+                        </label>
+                        {% if translation %}
+                        <span class="badge">{{confidence}}% confidence</span>
+                        {% endif %}
+                    </div>
+                    <textarea id="translated-text" placeholder="The translation will appear here" aria-label="The translation" readonly>{{translation}}</textarea>
+                </div>
+            </div>
+        </form>
+    </div>
 </body>
 </html>

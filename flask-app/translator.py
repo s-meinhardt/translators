@@ -308,8 +308,12 @@ def home():
 
 @app.route("/<output_language>/<text>", methods = ["POST"])
 def translator(output_language, text):
-	input_language = detect_language(text)
-	translation, confidence= translate(text, input_language, output_language)		
+	try:
+		input_language = detect_language(text)
+		translation, confidence= translate(text, input_language, output_language)
+	except requests.exceptions.RequestException:
+		error = f"Sorry, the {output_language} translation service is currently unavailable. Please try again later."
+		return render_template("translator.html", translation = '', confidence = 0, text = text, input_language = '', output_language = output_language, error = error)
 	return render_template("translator.html", translation = translation, confidence = confidence, text = text, input_language = input_language, output_language = output_language)
 
 
