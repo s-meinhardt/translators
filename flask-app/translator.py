@@ -61,10 +61,10 @@ PORT[('French', 'English')] = '8606'
 #Tokenizer[('French', 'English')] = HFTokenizer.from_file(os.path.join(VOCAB_PATH, 'wmt_de_32.json'))
 
 
-Tokenizer['Detector'] = BertWordPieceTokenizer(vocab_file = os.path.join(VOCAB_PATH, 'wmt_32k.txt'), lowercase = False)
-Tokenizer['German'] = BertWordPieceTokenizer(vocab_file = os.path.join(VOCAB_PATH, 'wmt_de_32k.txt'), lowercase = False)
-Tokenizer['English'] = BertWordPieceTokenizer(vocab_file = os.path.join(VOCAB_PATH, 'wmt_en_32k.txt'), lowercase = False)
-Tokenizer['French'] = BertWordPieceTokenizer(vocab_file = os.path.join(VOCAB_PATH, 'wmt_fr_32k.txt'), lowercase = False)
+Tokenizer['Detector'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, 'wmt_32k.txt'), lowercase = False)
+Tokenizer['German'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, 'wmt_de_32k.txt'), lowercase = False)
+Tokenizer['English'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, 'wmt_en_32k.txt'), lowercase = False)
+Tokenizer['French'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, 'wmt_fr_32k.txt'), lowercase = False)
 
 
 
