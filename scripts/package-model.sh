@@ -24,8 +24,8 @@
 # Example - retrain de-en, then rebuild and push its image entirely on GitHub:
 #
 #   scripts/package-model.sh de-en ~/training/de-en/0007 --release models-v2
-#   gh workflow run "serving images" \
-#       -f models=de-en -f release=models-v2 -f push=true
+#   # that updates serving/models.txt; commit it, then:
+#   gh workflow run "serving images" -f models=de-en -f push=true
 
 set -euo pipefail
 
@@ -80,14 +80,43 @@ shasum -a 256 "$archive"
 if [ -n "$release" ]; then
 	command -v gh >/dev/null || die "gh is required to upload; install it or upload by hand"
 	if gh release view "$release" --repo s-meinhardt/translators >/dev/null 2>&1; then
+		# Never replace an archive that is already published. For six of the
+		# seven models the release copy is the only one outside the Docker Hub
+		# image, and overwriting it - then rebuilding and pushing that image -
+		# would leave the original model nowhere. A retrain goes to a new tag,
+		# which is what docs/models.md describes.
+		if gh release view "$release" --repo s-meinhardt/translators \
+			--json assets -q '.assets[].name' | grep -qx "$model.tar.gz"; then
+			die "release $release already has $model.tar.gz; use a new release tag"
+		fi
 		echo "==> uploading to existing release $release"
-		gh release upload "$release" "$archive" --repo s-meinhardt/translators --clobber
+		gh release upload "$release" "$archive" --repo s-meinhardt/translators
 	else
 		echo "==> creating release $release"
 		gh release create "$release" "$archive" --repo s-meinhardt/translators \
-			--title "Trained models $release" \
+			--title "Trained models ${release#models-}" \
 			--notes "Model archives for the meinhardt4ai/translators serving images. See docs/models.md."
 	fi
+	# Record which release this model is now live in, so a later rebuild of all
+	# seven images picks up the new archive for this one and the old archives for
+	# the rest. Without this the next base-image rebuild would quietly revert it.
+	pins="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/serving/models.txt"
+	if [ -f "$pins" ]; then
+		tmp="$(mktemp)"
+		awk -v m="$model" -v r="$release" \
+			'$1 == m { printf "%-11s %s\n", m, r; next } { print }' "$pins" > "$tmp"
+		if cmp -s "$pins" "$tmp"; then
+			rm -f "$tmp"
+			echo "==> serving/models.txt already pins $model to $release"
+		else
+			mv "$tmp" "$pins"
+			echo "==> updated serving/models.txt: $model -> $release"
+			echo "    commit that one-line change so the repository records it."
+		fi
+	else
+		echo "==> note: $pins not found; pin $model to $release by hand"
+	fi
+
 	echo "==> now rebuild the image on GitHub:"
-	echo "    gh workflow run 'serving images' -f models=$model -f release=$release -f push=true"
+	echo "    gh workflow run 'serving images' -f models=$model -f push=true"
 fi

@@ -26,6 +26,7 @@ The seven serving images each carry one trained model baked into it. The models 
 | [translator_de_en.ipynb](translator_de_en.ipynb) | Jupyter notebook to train a translator model. |
 | [docker-script](docker-script) | Builds (and optionally pushes) one `tensorflow/serving` image from an archived model, tagged `meinhardt4ai/translators:<name>`. |
 | [serving/Dockerfile](serving/Dockerfile) | Dockerfile behind `docker-script`: lays one SavedModel into a `tensorflow/serving` base. |
+| [serving/models.txt](serving/models.txt) | Which release each serving image's model is built from, one line per model. |
 | [scripts/package-model.sh](scripts/package-model.sh) | Packages a freshly trained model and uploads it, ready for the serving-image workflow. |
 | [scripts/extract-models-from-images.sh](scripts/extract-models-from-images.sh) | Recovers the models from the published images. |
 | [docs/models.md](docs/models.md) | Where the trained models are archived, their signatures, and how to retrain one. |
@@ -55,13 +56,15 @@ Training is the only step that happens on your machine. Everything after it runs
 on GitHub, so no local path ends up in the repository or in an image.
 
 1. Open [translator_de_en.ipynb](translator_de_en.ipynb) and train a model, optionally seeding the tokenizer with a vocabulary from [flask-app/vocabularies/](flask-app/vocabularies). It writes a SavedModel to a relative path of its own.
-2. Package it and upload it to a new release:
+2. Package it and upload it to a new release (always a new tag — the script
+   refuses to overwrite a published archive):
    ```bash
    scripts/package-model.sh de-en <the-saved-model-dir> --release models-v2
    ```
-3. Rebuild and push `meinhardt4ai/translators:de-en` from that release:
+3. Commit the one-line change it makes to [serving/models.txt](serving/models.txt).
+4. Rebuild and push `meinhardt4ai/translators:de-en`:
    ```bash
-   gh workflow run "serving images" -f models=de-en -f release=models-v2 -f push=true
+   gh workflow run "serving images" -f models=de-en -f push=true
    ```
 
 See [docs/models.md](docs/models.md) for the archive layout and the model signatures.
@@ -95,7 +98,7 @@ and publishing a retrained model. Inputs:
 |---|---|---|
 | `models` | `all` | Space-separated subset, e.g. `de-en fr-en`. |
 | `tf_serving_version` | `2.21.0` | Base image tag — see [docs/models.md](docs/models.md#tensorflowserving-version). |
-| `release` | `models-v1` | Release holding the model archives. |
+| `release` | *(empty)* | Overrides the release for every model; normally left empty so the per-model pins in [serving/models.txt](serving/models.txt) apply. |
 | `push` | `false` | Build and verify only, unless set. |
 
 Every image is started and checked for its model reaching `AVAILABLE` before it

@@ -43,6 +43,16 @@ They were recovered from the images with
 [`scripts/extract-models-from-images.sh`](../scripts/extract-models-from-images.sh),
 which is also how you would recover them again.
 
+[`serving/models.txt`](../serving/models.txt) records which release each image's
+model is built from. It exists because one release tag for the whole set does
+not survive a retrain: a retrained model goes to a new release holding only
+that archive, so a later rebuild of all seven would either revert it (pointing
+at the old release) or fail to find the other six (pointing at the new one).
+With a pin per model, a rebuild of all seven always takes each model from the
+release it is actually live in, and a retrain is a reviewable one-line diff.
+`docker-script` reads the pins when no `--release` is given, and
+`package-model.sh` updates the relevant line after a successful upload.
+
 The repository's git history contains only older, superseded `de-en` variants
 (the `de-en v2`/`de-en v3` directories, with two-shard variables) — not the
 deployed models.
@@ -113,15 +123,37 @@ or in an image.
 
 1. Train the model in the notebook. It writes a SavedModel to a relative path of
    its own (`./test/transformer` by default).
-2. Package it and upload it to a new release:
+2. Package it and upload it to a **new** release:
    ```bash
    scripts/package-model.sh de-en <the-saved-model-dir> --release models-v2
    ```
-3. Rebuild and push that image from the new release:
+   Always a new tag. The script refuses to replace an archive that is already
+   published, because for six of the seven models the release copy is the only
+   one outside the Docker Hub image — overwriting it and then rebuilding that
+   image would leave the original model nowhere.
+3. Commit the one-line change the script made to
+   [`serving/models.txt`](../serving/models.txt), which is how the repository
+   records that `de-en` is now live in `models-v2`.
+4. Rebuild and push that image:
    ```bash
-   gh workflow run "serving images" -f models=de-en -f release=models-v2 -f push=true
+   gh workflow run "serving images" -f models=de-en -f push=true
    ```
-   Or use **Actions → serving images → Run workflow** in the browser.
+   Or use **Actions → serving images → Run workflow** in the browser. No release
+   needs naming: the pins already say where each model comes from.
 
 The workflow refuses to push an image whose model does not load, so a bad archive
 fails the run rather than the server.
+
+## Rolling back a serving image
+
+Unlike `web_app`, which also gets a `web_app-<sha>` tag, the serving images are
+pushed only as `:<model>` — there is no previous tag to repoint to. Rolling back
+means rebuilding, which is reliable now that the models are archived:
+
+```bash
+gh workflow run "serving images" -f models=de-en -f tf_serving_version=2.2.0 -f push=true
+```
+
+That reproduces the image as it was on the old base. To roll back to an earlier
+*model*, set that model's line in `serving/models.txt` back to the older release
+and rerun the workflow.
