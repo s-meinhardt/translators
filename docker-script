@@ -1,19 +1,147 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Build - and optionally push - one tensorflow/serving image from an archived
+# SavedModel, producing meinhardt4ai/translators:<model>.
+#
+# Normally you do not run this by hand: the "serving images" GitHub workflow runs
+# it on a native amd64 runner, which is the only place these images build without
+# emulation. It is kept as a single code path so CI and a local build cannot
+# drift apart.
+#
+# The models are not in git - the six translation models are 185 MB each, over
+# GitHub's 100 MB file limit - so the script fetches them from the release that
+# archives them. See docs/models.md.
+#
+# Usage:
+#   ./docker-script <model> [options]
+#
+#   <model>   detector | de-en | en-de | de-fr | fr-de | en-fr | fr-en
+#
+# Options:
+#   --model-dir DIR    Build from an already unpacked SavedModel version
+#                      directory (the one holding saved_model.pb and variables/).
+#                      Use this for a freshly trained model.
+#   --archive FILE     Build from a local <model>.tar.gz.
+#   --release TAG      Download the archive from this release instead
+#                      (default: $MODELS_RELEASE, else models-v1).
+#   --tf-serving VER   tensorflow/serving tag to base the image on
+#                      (default: $TF_SERVING_VERSION, else TF_SERVING_DEFAULT
+#                      below). See docs/models.md for which versions are known
+#                      to serve these models.
+#   --tag TAG          Full image tag to build (default:
+#                      meinhardt4ai/translators:<model>).
+#   --platform P       Build platform (default: linux/amd64; tensorflow/serving
+#                      publishes amd64 only, so an arm64 host needs emulation).
+#   --push             Push the image after building it.
+#   -h, --help         Show this help.
+#
+# Without --model-dir or --archive, the script downloads <model>.tar.gz from the
+# release.
+#
+# Examples:
+#   ./docker-script de-en
+#   ./docker-script de-en --tf-serving 2.21.0 --push
 
-export MODEL_PATH="/home/sven/Python/TensorFlow-Training/Text/Translator/${1}/beamsearch/000${2}"
+set -euo pipefail
 
-docker run -d --name serving_base tensorflow/serving
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_REPO="meinhardt4ai/translators"
+VALID_MODELS="detector de-en en-de de-fr fr-de en-fr fr-en"
 
-mkdir empty
+# Kept in step with the "serving images" workflow default; see docs/models.md for
+# the versions these models have been verified on.
+TF_SERVING_DEFAULT="2.21.0"
 
-docker cp empty serving_base:/models/translator
+model=""
+model_dir=""
+archive=""
+release="${MODELS_RELEASE:-models-v1}"
+tf_serving="${TF_SERVING_VERSION:-$TF_SERVING_DEFAULT}"
+image_tag=""
+platform="linux/amd64"
+push=0
 
-docker cp $MODEL_PATH serving_base:/models/translator/0001
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^#\{1,2\} \{0,1\}//'; }
 
-docker commit --change "ENV MODEL_NAME translator" serving_base meinhardt4ai/translators:$1
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help)    usage; exit 0 ;;
+		--model-dir)  model_dir="${2:?--model-dir needs a directory}"; shift 2 ;;
+		--archive)    archive="${2:?--archive needs a file}"; shift 2 ;;
+		--release)    release="${2:?--release needs a tag}"; shift 2 ;;
+		--tf-serving) tf_serving="${2:?--tf-serving needs a version}"; shift 2 ;;
+		--tag)        image_tag="${2:?--tag needs a tag}"; shift 2 ;;
+		--platform)   platform="${2:?--platform needs a platform}"; shift 2 ;;
+		--push)       push=1; shift ;;
+		-*)           die "unknown option: $1" ;;
+		*)
+			[ -z "$model" ] || die "unexpected argument: $1"
+			model="$1"; shift ;;
+	esac
+done
 
-docker stop serving_base
+[ -n "$model" ] || { usage; exit 2; }
 
-docker rm serving_base
+case " $VALID_MODELS " in
+	*" $model "*) ;;
+	*) die "unknown model '$model'; expected one of: $VALID_MODELS" ;;
+esac
 
-rmdir empty
+# The detector image serves a model named "detector"; every translation
+# direction serves one named "translator" (the web app looks them up by port).
+if [ "$model" = detector ]; then
+	model_name=detector
+else
+	model_name=translator
+fi
+
+[ -n "$image_tag" ] || image_tag="$IMAGE_REPO:$model"
+
+command -v docker >/dev/null || die "docker is not installed"
+
+# Build the context in a temporary directory so the repository stays clean and a
+# 185 MB model is never left behind on a failed build.
+ctx="$(mktemp -d)"
+cleanup() { rm -rf "$ctx"; }
+trap cleanup EXIT
+
+cp "$REPO_ROOT/serving/Dockerfile" "$ctx/Dockerfile"
+
+# Resolve where the model comes from, most explicit option first.
+if [ -n "$model_dir" ]; then
+	[ -f "$model_dir/saved_model.pb" ] \
+		|| die "$model_dir does not look like a SavedModel version directory (no saved_model.pb)"
+	echo "==> model: $model_dir"
+	cp -R "$model_dir" "$ctx/0001"
+else
+	if [ -z "$archive" ]; then
+		command -v gh >/dev/null \
+			|| die "gh is required to download models; install it, or pass --archive/--model-dir"
+		echo "==> downloading $model.tar.gz from release $release"
+		gh release download "$release" --repo s-meinhardt/translators \
+			--pattern "$model.tar.gz" --dir "$ctx" \
+			|| die "could not download $model.tar.gz from release $release"
+		archive="$ctx/$model.tar.gz"
+	fi
+	[ -f "$archive" ] || die "archive not found: $archive"
+	echo "==> model: $archive"
+	tar -xzf "$archive" -C "$ctx"
+fi
+
+[ -f "$ctx/0001/saved_model.pb" ] || die "no saved_model.pb in the resolved model; nothing to build"
+
+echo "==> building $image_tag (tensorflow/serving:$tf_serving, MODEL_NAME=$model_name, $platform)"
+docker build \
+	--platform "$platform" \
+	--build-arg "TF_SERVING_VERSION=$tf_serving" \
+	--build-arg "MODEL_NAME=$model_name" \
+	--tag "$image_tag" \
+	"$ctx"
+
+if [ "$push" -eq 1 ]; then
+	echo "==> pushing $image_tag"
+	docker push "$image_tag"
+else
+	echo "==> built $image_tag (not pushed; pass --push to push)"
+fi

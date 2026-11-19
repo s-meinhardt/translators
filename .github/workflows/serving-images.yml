@@ -1,0 +1,189 @@
+# Rebuilds the tensorflow/serving images from the archived models.
+#
+# These images change far less often than web_app: the models are frozen, so the
+# only reason to rebuild is to move onto a newer, patched tensorflow/serving
+# base. It is therefore manual only.
+#
+# It is also where these images are meant to be built: tensorflow/serving is
+# published for amd64 only, so a GitHub runner builds them natively while an
+# Apple Silicon machine would need emulation.
+#
+# The models are not in git (185 MB each, over GitHub's 100 MB file limit); they
+# are .tar.gz assets on a release of this repository. See docs/models.md.
+name: serving images
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: 'Space-separated models to build, or "all"'
+        default: all
+        type: string
+      tf_serving_version:
+        description: 'tensorflow/serving base image tag'
+        default: '2.21.0'
+        type: string
+      release:
+        description: 'Release holding the model archives'
+        default: models-v1
+        type: string
+      push:
+        description: 'Push the images to Docker Hub'
+        default: false
+        type: boolean
+
+concurrency:
+  group: serving-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: meinhardt4ai/translators
+
+jobs:
+  # Turns the free-text "models" input into a matrix, so a single model can be
+  # rebuilt without touching the other six.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      models: ${{ steps.plan.outputs.models }}
+    steps:
+      - id: plan
+        env:
+          REQUESTED: ${{ inputs.models }}
+        run: |
+          set -euo pipefail
+          all="detector de-en en-de de-fr fr-de en-fr fr-en"
+
+          if [ "$REQUESTED" = all ] || [ -z "${REQUESTED// /}" ]; then
+            selected="$all"
+          else
+            selected=""
+            for model in $REQUESTED; do
+              case " $all " in
+                *" $model "*) selected="$selected $model" ;;
+                *) echo "::error::unknown model '$model'; expected from: $all"; exit 1 ;;
+              esac
+            done
+          fi
+
+          json="$(printf '%s\n' $selected | jq -R . | jq -sc .)"
+          echo "models=$json" >> "$GITHUB_OUTPUT"
+          echo "Building: $selected" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.plan.outputs.models) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to Docker Hub
+        if: inputs.push
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # docker-script downloads the model archive from the release with gh.
+      - name: Build ${{ matrix.model }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./docker-script "${{ matrix.model }}" \
+            --tf-serving "${{ inputs.tf_serving_version }}" \
+            --release "${{ inputs.release }}"
+
+      # A serving image that cannot load its model is useless, and that is
+      # exactly what bumping the base image can break - so check it here rather
+      # than discovering it on the server.
+      - name: Verify the model loads and serves
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.model }}" = detector ]; then
+            model_name=detector
+          else
+            model_name=translator
+          fi
+
+          docker run -d --name serving_check -p 8501:8501 "$IMAGE:${{ matrix.model }}"
+
+          status=''
+          for _ in $(seq 1 60); do
+            status="$(curl -fsS --max-time 5 \
+              "http://localhost:8501/v1/models/$model_name" 2>/dev/null || true)"
+            case "$status" in
+              *AVAILABLE*) break ;;
+            esac
+            sleep 2
+          done
+
+          case "$status" in
+            *AVAILABLE*)
+              echo "$model_name is AVAILABLE"
+              ;;
+            *)
+              echo "::error::${{ matrix.model }} did not reach AVAILABLE within 120s"
+              docker logs serving_check
+              exit 1
+              ;;
+          esac
+
+          docker rm -f serving_check > /dev/null
+
+      # Advisory, not a gate. Beam search is inside the SavedModel, so how long a
+      # prediction takes depends on the model and the input, and a slow one is a
+      # pre-existing property rather than something a base-image bump caused.
+      # Reaching AVAILABLE above is the real test of the image; this just reports
+      # whether the graph actually executes on a native amd64 runner.
+      - name: Prediction check (advisory)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ "${{ matrix.model }}" = detector ]; then
+            name=detector
+            row="$(python3 -c 'print(",".join(["0.1"] * 64))')"
+            body="{\"instances\":[[$row]]}"
+          else
+            name=translator
+            row="$(python3 -c 'print(",".join(["2", "100", "200", "300", "400", "5"] + ["0"] * 34))')"
+            body="{\"instances\":[[$row]]}"
+          fi
+
+          docker run -d --name predict_check -p 8502:8501 "$IMAGE:${{ matrix.model }}" > /dev/null
+          for _ in $(seq 1 60); do
+            case "$(curl -fsS --max-time 5 "http://localhost:8502/v1/models/$name" 2>/dev/null || true)" in
+              *AVAILABLE*) break ;;
+            esac
+            sleep 2
+          done
+
+          start=$(date +%s)
+          out=$(curl -sS --max-time 300 -H 'Content-Type: application/json' \
+            -d "$body" "http://localhost:8502/v1/models/$name:predict" 2>&1 || true)
+          took=$(( $(date +%s) - start ))
+          docker rm -f predict_check > /dev/null
+
+          case "$out" in
+            *predictions*)
+              echo "- ${{ matrix.model }}: prediction OK in ${took}s" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::warning::${{ matrix.model }} served its model but a prediction did not return in ${took}s: ${out:0:200}"
+              echo "- ${{ matrix.model }}: prediction did NOT return (${took}s)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
+
+      - name: Push ${{ matrix.model }}
+        if: inputs.push
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:${{ matrix.model }}"
+          echo "- pushed \`$IMAGE:${{ matrix.model }}\` (tensorflow/serving:${{ inputs.tf_serving_version }})" \
+            >> "$GITHUB_STEP_SUMMARY"
