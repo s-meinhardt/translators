@@ -53,9 +53,10 @@ release it is actually live in, and a retrain is a reviewable one-line diff.
 `docker-script` reads the pins when no `--release` is given, and
 `package-model.sh` updates the relevant line after a successful upload.
 
-The repository's git history contains only older, superseded `de-en` variants
-(the `de-en v2`/`de-en v3` directories, with two-shard variables) — not the
-deployed models.
+The repository's git history contains only older, superseded `de-en` variants —
+the `de-en v2` and `de-en v3` directories with two-shard variables, and a
+`de-en v4` tree — not the deployed models. Together they account for roughly
+407 MB of the repository's history.
 
 ## Signatures
 
@@ -85,31 +86,43 @@ The deployed images were built on `tensorflow/serving:2.2.0` in August 2020.
 current release, so a rebuild picks up several years of base-image fixes. The
 image tags do not change, so [translator.yml](../translator.yml) needs no edit.
 
-All seven models were checked on 2.21.0 by rebuilding each image and querying it:
+All seven models were checked on 2.21.0 by rebuilding each image, querying it
+and running a prediction. All seven load and all seven predict correctly.
 
-| Model | Loads (`AVAILABLE`) | Prediction returns |
+### Use real token ids when testing a model
+
+A prediction only means something if the input is a real tokenised sentence.
+Arbitrary ids make beam search wander until TensorFlow Serving's own 30-second
+REST timeout fires and returns `{"error": "Timed out waiting for notification"}`
+— which says nothing about the model.
+
+An earlier revision of this file reported `en-fr` as unable to predict, based on
+an input of `[2, 100, 200, 300, 400, 5, 0…]`. Those ids are
+`[CLS] ¢ ċ Ι н !` in `flask-app/vocabularies/wmt_en_32k.txt`, and the web app
+strips `[CLS]`/`[SEP]` before sending anyway (`translator.py`, `.ids[1:-1]`).
+That record was wrong: given a real sentence, `en-fr` answers in about 25
+seconds under amd64 emulation, on both `2.2.0` and `2.21.0`:
+
+```
+$ curl -d '{"instances":[[6868,7272,16,2414,1751,1874,35]]}' \
+    localhost:8501/v1/models/translator:predict          # Good morning , how are you ?
+{"predictions":[{"probabilities":0.00318805268,
+                 "sequences":[9731,8481,16,3423,5767,17,2114,35,0,0]}]}
+                                                        # Bon matin , comment êtes - vous ?
+```
+
+The inputs the `serving images` workflow uses are whole-word lookups in the
+app's own vocabularies, one per source language:
+
+| Models | Token ids | Sentence |
 |---|---|---|
-| `detector` | yes | yes |
-| `de-en` | yes | yes |
-| `en-de` | yes | yes |
-| `de-fr` | yes | yes |
-| `fr-de` | yes | yes |
-| `fr-en` | yes | yes |
-| `en-fr` | yes | timed out — see below |
+| `en-de`, `en-fr` | `6868,7272,16,2414,1751,1874,35` | Good morning , how are you ? |
+| `de-en`, `de-fr` | `19174,6793,16,1956,3364,1922,2794,35` | Guten Morgen , wie geht es dir ? |
+| `fr-en`, `fr-de` | `32540,16,3423,15248,17,2114,35` | Bonjour , comment allez - vous ? |
+| `detector` | 64 × `0.1` | (neutral embedding input) |
 
-`en-fr` loads and serves, but a prediction against it did not return within 10
-minutes. That is **not** caused by the version bump: it behaves identically on
-`2.2.0`, the version running in production today. The checks above were run on an
-Apple Silicon machine under amd64 emulation, where these models are roughly an
-order of magnitude slower, and the other six return in well under a minute — so
-the most likely explanation is that beam search on `en-fr` runs longer for the
-synthetic input used, and tips over TensorFlow Serving's request timeout under
-emulation. It has not been confirmed either way on native amd64.
-
-For that reason the `serving images` workflow gates on the model reaching
-`AVAILABLE` — which is what makes an image usable — and runs its prediction check
-as advisory, reporting a warning instead of failing. The first run of that
-workflow will show how `en-fr` behaves natively.
+Because the input is real, the prediction is a **gate**: an image that loads its
+model but cannot translate is not pushed.
 
 Note that `tensorflow/serving` publishes **amd64 only** — there is no arm64
 manifest — which is why these images are built on GitHub's amd64 runners rather
@@ -132,14 +145,23 @@ or in an image.
    one outside the Docker Hub image — overwriting it and then rebuilding that
    image would leave the original model nowhere.
 3. Commit the one-line change the script made to
-   [`serving/models.txt`](../serving/models.txt), which is how the repository
-   records that `de-en` is now live in `models-v2`.
-4. Rebuild and push that image:
+   [`serving/models.txt`](../serving/models.txt) **and get it onto `master`**
+   (push it, or merge its PR). The workflow checks out the ref it was
+   dispatched on, which is the default branch unless you pass `--ref`, so it
+   reads `master`'s copy of the pins — a pin that exists only locally or on a
+   branch would rebuild the *previous* archive, and the run would still be
+   green. To try a pin before merging, dispatch with
+   `--ref <branch> -f push=false`.
+4. Rebuild and push that image. Naming the release explicitly is correct for a
+   single model whether or not the pin has landed yet:
    ```bash
-   gh workflow run "serving images" -f models=de-en -f push=true
+   gh workflow run "serving images" \
+       -f models=de-en -f release=models-v2 -f push=true
    ```
-   Or use **Actions → serving images → Run workflow** in the browser. No release
-   needs naming: the pins already say where each model comes from.
+   Or use **Actions → serving images → Run workflow** in the browser. Once the
+   pin is on `master`, a rebuild of everything needs no release at all — the
+   pins say where each model comes from. Each run reports, in its summary,
+   which release every image was built from.
 
 The workflow refuses to push an image whose model does not load, so a bad archive
 fails the run rather than the server.
@@ -156,4 +178,5 @@ gh workflow run "serving images" -f models=de-en -f tf_serving_version=2.2.0 -f 
 
 That reproduces the image as it was on the old base. To roll back to an earlier
 *model*, set that model's line in `serving/models.txt` back to the older release
-and rerun the workflow.
+and its checksum, get that onto `master`, and rerun the workflow — or pass
+`-f release=<older tag>` for a single model, which does not wait on `master`.
