@@ -123,6 +123,12 @@ Both workflows push to Docker Hub and need two repository secrets:
 
 Pull-request builds do not log in, so they work without them.
 
+One caveat if you ever turn on Dependabot auto-merge: a run whose actor is
+`dependabot[bot]` gets no Actions secrets, so the `push` to `master` that
+Dependabot's own merge produces would fail at the login step. Merging from the
+UI yourself is unaffected. The fix, should you want that path, is a
+Dependabot-scoped copy of the two secrets.
+
 ## Tech stack
 
 Flask, Werkzeug, NLTK (sentence splitting), Hugging Face `tokenizers` (WordPiece), TensorFlow Serving, Docker Compose.

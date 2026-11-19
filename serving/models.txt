@@ -7,9 +7,12 @@
 # all seven images picks up the right archive per model even after one of them
 # has been retrained into a new release.
 #
-# The checksum is verified after download. Release assets stay mutable for
-# anyone with write access to the repository, so this is what makes the pin a
-# statement about a specific archive rather than just a tag.
+# The checksum is verified after download, and is required: a line without one
+# is refused rather than built unverified. Release assets stay mutable for
+# anyone with write access to the repository, so the checksum is what makes the
+# pin a statement about a specific archive rather than just a tag.
+#
+# Get a checksum with: shasum -a 256 <model>.tar.gz
 #
 # Retraining updates one line here: scripts/package-model.sh does it for you
 # after a successful upload. Commit it AND get it onto master - the workflow
