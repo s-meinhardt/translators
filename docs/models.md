@@ -44,7 +44,7 @@ They were recovered from the images with
 which is also how you would recover them again.
 
 [`serving/models.txt`](../serving/models.txt) records which release each image's
-model is built from. It exists because one release tag for the whole set does
+model is built from, with that archive's SHA-256. It exists because one release tag for the whole set does
 not survive a retrain: a retrained model goes to a new release holding only
 that archive, so a later rebuild of all seven would either revert it (pointing
 at the old release) or fail to find the other six (pointing at the new one).
@@ -52,6 +52,12 @@ With a pin per model, a rebuild of all seven always takes each model from the
 release it is actually live in, and a retrain is a reviewable one-line diff.
 `docker-script` reads the pins when no `--release` is given, and
 `package-model.sh` updates the relevant line after a successful upload.
+
+The checksum is verified after every download and is not optional: a pin line
+without one is refused rather than built unverified. A `--release` override is
+still verified when it names the release the pins already pin — which is what
+the documented single-model publish does — and says on its release line when it
+cannot be.
 
 The repository's git history contains only older, superseded `de-en` variants —
 the `de-en v2` and `de-en v3` directories with two-shard variables, and a
@@ -86,8 +92,25 @@ The deployed images were built on `tensorflow/serving:2.2.0` in August 2020.
 current release, so a rebuild picks up several years of base-image fixes. The
 image tags do not change, so [translator.yml](../translator.yml) needs no edit.
 
-All seven models were checked on 2.21.0 by rebuilding each image, querying it
-and running a prediction. All seven load and all seven predict correctly.
+All seven models were checked on 2.21.0 by rebuilding each image from its
+archive, querying it until the model reported `AVAILABLE`, and sending a real
+tokenised sentence. All seven load and all seven translate. Timings are from an
+Apple Silicon machine under amd64 emulation, so a native runner will be faster:
+
+| Model | Input | Output | |
+|---|---|---|---|
+| `detector` | 64 × `0.1` | classified | <1s |
+| `de-en` | Guten Morgen , wie geht es dir ? | Good morning , how do you go ? | 27s |
+| `en-de` | Good morning , how are you ? | Gute Morgen , wie bist du ? | 12s |
+| `de-fr` | Guten Morgen , wie geht es dir ? | Bonjour , comment t &apos; agit - il ? | 15s |
+| `fr-de` | Bonjour , comment allez - vous ? | Hallo , wie gehen Sie ? | 12s |
+| `en-fr` | Good morning , how are you ? | Bon matin , comment êtes - vous ? | 24s |
+| `fr-en` | Bonjour , comment allez - vous ? | Hello , how do you go ? | 13s |
+
+The translations are loose — these are small 2020 models and the outputs above
+are what they actually produce. The point of the check is that the graph runs
+and returns a sequence, not that the wording is good, so the workflow asserts
+only that a prediction comes back.
 
 ### Use real token ids when testing a model
 

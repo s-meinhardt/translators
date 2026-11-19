@@ -27,8 +27,10 @@
 #                      do not need it: the pins already say which release each
 #                      model is live in, so a rebuild of all seven picks the
 #                      right archive per model even after one was retrained.
-#                      An override skips the checksum check, since the pins
-#                      hold no checksum for an archive they do not name.
+#                      An override is still checksum-verified when it names the
+#                      release the pins already pin; otherwise there is no
+#                      pinned checksum for it and the check is skipped, which
+#                      the script says on its release line.
 #   --tf-serving VER   tensorflow/serving tag to base the image on
 #                      (default: $TF_SERVING_VERSION, else TF_SERVING_DEFAULT
 #                      below). See docs/models.md for which versions are known
@@ -119,17 +121,34 @@ fi
 # from a release.
 expected_sha=""
 if [ -z "$model_dir" ] && [ -z "$archive" ]; then
+	pinned_release=""
+	pinned_sha=""
+	if [ -f "$MODELS_PINS" ]; then
+		pinned_release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
+		pinned_sha="$(awk -v m="$model" '$1 == m { print $3; exit }' "$MODELS_PINS")"
+	fi
+
 	if [ -n "$release" ]; then
-		# An explicit --release names an archive the pins say nothing about, so
-		# there is no pinned checksum to check it against.
-		echo "==> release: $release (--release override; checksum not verified)"
+		# An override still gets verified when it names the release the pins
+		# already pin - which is what the documented single-model publish does -
+		# so the common case does not quietly lose its integrity check.
+		if [ "$release" = "$pinned_release" ] && [ -n "$pinned_sha" ]; then
+			expected_sha="$pinned_sha"
+			echo "==> release: $release (--release override, same as the pin; checksum verified)"
+		else
+			echo "==> release: $release (--release override; no pinned checksum for it, not verified)"
+		fi
 	else
 		[ -f "$MODELS_PINS" ] \
 			|| die "$MODELS_PINS is missing; pass --release, --archive or --model-dir"
-		release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
-		expected_sha="$(awk -v m="$model" '$1 == m { print $3; exit }' "$MODELS_PINS")"
-		[ -n "$release" ] \
+		[ -n "$pinned_release" ] \
 			|| die "no release pinned for '$model' in $MODELS_PINS; add a line or pass --release"
+		# A pin without a checksum would build without any integrity check and
+		# without saying so, which is worse than failing.
+		[ -n "$pinned_sha" ] \
+			|| die "the pin for '$model' in $MODELS_PINS has no checksum column; add the sha256 of $model.tar.gz (shasum -a 256) or pass --release"
+		release="$pinned_release"
+		expected_sha="$pinned_sha"
 		echo "==> release: $release (pinned in serving/models.txt)"
 	fi
 fi
