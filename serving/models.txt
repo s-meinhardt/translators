@@ -1,0 +1,19 @@
+# Which release each serving image's model is built from.
+#
+# The models are not in git (see docs/models.md), so this file is where the
+# repository records which archive is live for each image. docker-script reads
+# it when no --release is given, which means a routine base-image rebuild of
+# all seven images picks up the right archive per model even after one of them
+# has been retrained into a new release.
+#
+# Retraining updates one line here: scripts/package-model.sh does it for you
+# after a successful upload, and the change is then a reviewable one-line diff.
+#
+# <model>   <release tag>
+detector    models-v1
+de-en       models-v1
+en-de       models-v1
+de-fr       models-v1
+fr-de       models-v1
+en-fr       models-v1
+fr-en       models-v1

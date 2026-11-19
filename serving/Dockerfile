@@ -5,8 +5,8 @@
 #   <context>/0001/saved_model.pb
 #   <context>/0001/variables/...
 #
-# Build it with scripts/build-serving-image.sh rather than by hand; that script
-# unpacks the model archive into a context of this shape.
+# Build it with ./docker-script rather than by hand; that unpacks the model
+# archive into a context of this shape.
 
 # Overridden by docker-script; see docs/models.md for the verified versions.
 ARG TF_SERVING_VERSION=2.21.0

@@ -22,8 +22,11 @@
 #                      directory (the one holding saved_model.pb and variables/).
 #                      Use this for a freshly trained model.
 #   --archive FILE     Build from a local <model>.tar.gz.
-#   --release TAG      Download the archive from this release instead
-#                      (default: $MODELS_RELEASE, else models-v1).
+#   --release TAG      Download the archive from this release, overriding the
+#                      pin in serving/models.txt for this model. Normally you
+#                      do not need it: the pins already say which release each
+#                      model is live in, so a rebuild of all seven picks the
+#                      right archive per model even after one was retrained.
 #   --tf-serving VER   tensorflow/serving tag to base the image on
 #                      (default: $TF_SERVING_VERSION, else TF_SERVING_DEFAULT
 #                      below). See docs/models.md for which versions are known
@@ -36,7 +39,7 @@
 #   -h, --help         Show this help.
 #
 # Without --model-dir or --archive, the script downloads <model>.tar.gz from the
-# release.
+# release that serving/models.txt pins this model to.
 #
 # Examples:
 #   ./docker-script de-en
@@ -52,10 +55,16 @@ VALID_MODELS="detector de-en en-de de-fr fr-de en-fr fr-en"
 # the versions these models have been verified on.
 TF_SERVING_DEFAULT="2.21.0"
 
+# Per-model release pins. Deliberately not a single default for every model: one
+# release tag for the whole set means the first base-image rebuild after a
+# retrain either reverts the retrained model (if it points at the old release)
+# or cannot find the other six (if it points at the new one).
+MODELS_PINS="$REPO_ROOT/serving/models.txt"
+
 model=""
 model_dir=""
 archive=""
-release="${MODELS_RELEASE:-models-v1}"
+release=""
 tf_serving="${TF_SERVING_VERSION:-$TF_SERVING_DEFAULT}"
 image_tag=""
 platform="linux/amd64"
@@ -98,12 +107,27 @@ fi
 
 [ -n "$image_tag" ] || image_tag="$IMAGE_REPO:$model"
 
+# Resolve the release from the pins unless --release overrode it. Only needed
+# when the model actually comes from a release.
+if [ -z "$release" ] && [ -z "$model_dir" ] && [ -z "$archive" ]; then
+	[ -f "$MODELS_PINS" ] \
+		|| die "$MODELS_PINS is missing; pass --release, --archive or --model-dir"
+	release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
+	[ -n "$release" ] \
+		|| die "no release pinned for '$model' in $MODELS_PINS; add a line or pass --release"
+	echo "==> release: $release (pinned in serving/models.txt)"
+fi
+
 command -v docker >/dev/null || die "docker is not installed"
 
 # Build the context in a temporary directory so the repository stays clean and a
 # 185 MB model is never left behind on a failed build.
 ctx="$(mktemp -d)"
-cleanup() { rm -rf "$ctx"; }
+# The archive is downloaded here rather than into $ctx: anything inside the
+# context is uploaded to the docker daemon, so leaving a ~153 MB .tar.gz there
+# would send the model twice.
+dl="$(mktemp -d)"
+cleanup() { rm -rf "$ctx" "$dl"; }
 trap cleanup EXIT
 
 cp "$REPO_ROOT/serving/Dockerfile" "$ctx/Dockerfile"
@@ -120,9 +144,9 @@ else
 			|| die "gh is required to download models; install it, or pass --archive/--model-dir"
 		echo "==> downloading $model.tar.gz from release $release"
 		gh release download "$release" --repo s-meinhardt/translators \
-			--pattern "$model.tar.gz" --dir "$ctx" \
+			--pattern "$model.tar.gz" --dir "$dl" \
 			|| die "could not download $model.tar.gz from release $release"
-		archive="$ctx/$model.tar.gz"
+		archive="$dl/$model.tar.gz"
 	fi
 	[ -f "$archive" ] || die "archive not found: $archive"
 	echo "==> model: $archive"
