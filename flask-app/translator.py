@@ -67,6 +67,11 @@ Tokenizer['English'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, '
 Tokenizer['French'] = BertWordPieceTokenizer(vocab = os.path.join(VOCAB_PATH, 'wmt_fr_32k.txt'), lowercase = False)
 
 
+# fail fast if NLTK's sentence-splitting data ('punkt_tab') is missing: sent_tokenize loads it
+# lazily, so otherwise the app would start fine and only fail (HTTP 500) on every translation
+sent_tokenize('Test.', language = 'german')
+
+
 
 
 
