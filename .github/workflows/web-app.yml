@@ -1,0 +1,112 @@
+# Builds the Flask web image. This is the workflow that matters for routine
+# dependency bumps: flask-app/requirements.txt is the only thing that changes
+# when dependabot opens a PR, and the only image affected by it is web_app.
+#
+# On a pull request the image is built and smoke-tested but not pushed, so a
+# dependency bump is verified before it is merged. On a push to master the same
+# image is pushed to Docker Hub.
+name: web app image
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - flask-app/**
+      - .github/workflows/web-app.yml
+  pull_request:
+    paths:
+      - flask-app/**
+      - .github/workflows/web-app.yml
+  workflow_dispatch:
+
+concurrency:
+  group: web-app-${{ github.ref }}
+  # Supersede an outdated pull-request build, but never cancel a push to master
+  # half way through pushing the image.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: meinhardt4ai/translators
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Built with load: true so the smoke test below runs against the exact
+      # image that is pushed afterwards, rather than a second build of it.
+      - name: Build web_app image
+        uses: docker/build-push-action@v7
+        with:
+          context: flask-app
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:web_app
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The Dockerfile already fails the build if NLTK's punkt_tab data is
+      # missing or if importing the app raises. This goes one step further and
+      # checks that the server actually starts and serves its page - which is
+      # what a dependency bump is most likely to break.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run -d --name web_app_smoke -p 5000:5000 "$IMAGE:web_app"
+
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 5 http://localhost:5000/ > page.html; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ ! -s page.html ]; then
+            echo "::error::the web app did not serve / within 60s"
+            docker logs web_app_smoke
+            exit 1
+          fi
+
+          # The index template renders the language picker; if that is present,
+          # Flask, Jinja and the tokenizers all loaded.
+          if ! grep -qi 'German' page.html; then
+            echo "::error::/ responded but did not render the expected page"
+            head -c 2000 page.html
+            exit 1
+          fi
+
+          echo "web app served / and rendered the translator page"
+          docker rm -f web_app_smoke > /dev/null
+
+      # Both the login and the push require master, not just "not a pull
+      # request". workflow_dispatch lets you pick any branch, and without the
+      # ref check a dispatch from a feature branch would publish that branch's
+      # code as :web_app - the tag translator.yml deploys. A dispatch from
+      # another branch still builds and smoke-tests, which is the useful part.
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # web_app is the tag translator.yml references; the sha tag is there to
+      # roll back to a known-good build without rebuilding it.
+      - name: Push web_app image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: |
+          set -euo pipefail
+          sha_tag="$IMAGE:web_app-${GITHUB_SHA::7}"
+          docker tag "$IMAGE:web_app" "$sha_tag"
+          docker push "$IMAGE:web_app"
+          docker push "$sha_tag"
+          echo "### Pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$IMAGE:web_app\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$sha_tag\`" >> "$GITHUB_STEP_SUMMARY"

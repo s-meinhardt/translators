@@ -1,19 +1,227 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Build - and optionally push - one tensorflow/serving image from an archived
+# SavedModel, producing meinhardt4ai/translators:<model>.
+#
+# Normally you do not run this by hand: the "serving images" GitHub workflow runs
+# it on a native amd64 runner, which is the only place these images build without
+# emulation. It is kept as a single code path so CI and a local build cannot
+# drift apart.
+#
+# The models are not in git - the six translation models are 185 MB each, over
+# GitHub's 100 MB file limit - so the script fetches them from the release that
+# archives them. See docs/models.md.
+#
+# Usage:
+#   ./docker-script <model> [options]
+#
+#   <model>   detector | de-en | en-de | de-fr | fr-de | en-fr | fr-en
+#
+# Options:
+#   --model-dir DIR    Build from an already unpacked SavedModel version
+#                      directory (the one holding saved_model.pb and variables/).
+#                      Use this for a freshly trained model.
+#   --archive FILE     Build from a local <model>.tar.gz.
+#   --release TAG      Download the archive from this release, overriding the
+#                      pin in serving/models.txt for this model. Normally you
+#                      do not need it: the pins already say which release each
+#                      model is live in, so a rebuild of all seven picks the
+#                      right archive per model even after one was retrained.
+#                      An override is still checksum-verified when it names the
+#                      release the pins already pin; otherwise there is no
+#                      pinned checksum for it and the check is skipped, which
+#                      the script says on its release line.
+#   --tf-serving VER   tensorflow/serving tag to base the image on
+#                      (default: $TF_SERVING_VERSION, else TF_SERVING_DEFAULT
+#                      below). See docs/models.md for which versions are known
+#                      to serve these models.
+#   --tag TAG          Full image tag to build (default:
+#                      meinhardt4ai/translators:<model>).
+#   --platform P       Build platform (default: linux/amd64; tensorflow/serving
+#                      publishes amd64 only, so an arm64 host needs emulation).
+#   --push             Push the image after building it.
+#   -h, --help         Show this help.
+#
+# Without --model-dir or --archive, the script downloads <model>.tar.gz from the
+# release that serving/models.txt pins this model to, and verifies it against
+# the checksum pinned there.
+#
+# Note that the "serving images" workflow runs this from the ref it was
+# dispatched on - the default branch unless dispatched with --ref - so a pin
+# change has to reach master before a rebuild will honour it.
+#
+# Examples:
+#   ./docker-script de-en
+#   ./docker-script de-en --tf-serving 2.21.0 --push
 
-export MODEL_PATH="/home/sven/Python/TensorFlow-Training/Text/Translator/${1}/beamsearch/000${2}"
+set -euo pipefail
 
-docker run -d --name serving_base tensorflow/serving
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_REPO="meinhardt4ai/translators"
+VALID_MODELS="detector de-en en-de de-fr fr-de en-fr fr-en"
 
-mkdir empty
+# Kept in step with the "serving images" workflow default; see docs/models.md for
+# the versions these models have been verified on.
+TF_SERVING_DEFAULT="2.21.0"
 
-docker cp empty serving_base:/models/translator
+# Per-model release pins. Deliberately not a single default for every model: one
+# release tag for the whole set means the first base-image rebuild after a
+# retrain either reverts the retrained model (if it points at the old release)
+# or cannot find the other six (if it points at the new one).
+MODELS_PINS="$REPO_ROOT/serving/models.txt"
 
-docker cp $MODEL_PATH serving_base:/models/translator/0001
+model=""
+model_dir=""
+archive=""
+release=""
+tf_serving="${TF_SERVING_VERSION:-$TF_SERVING_DEFAULT}"
+image_tag=""
+platform="linux/amd64"
+push=0
 
-docker commit --change "ENV MODEL_NAME translator" serving_base meinhardt4ai/translators:$1
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^#\{1,2\} \{0,1\}//'; }
 
-docker stop serving_base
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help)    usage; exit 0 ;;
+		--model-dir)  model_dir="${2:?--model-dir needs a directory}"; shift 2 ;;
+		--archive)    archive="${2:?--archive needs a file}"; shift 2 ;;
+		--release)    release="${2:?--release needs a tag}"; shift 2 ;;
+		--tf-serving) tf_serving="${2:?--tf-serving needs a version}"; shift 2 ;;
+		--tag)        image_tag="${2:?--tag needs a tag}"; shift 2 ;;
+		--platform)   platform="${2:?--platform needs a platform}"; shift 2 ;;
+		--push)       push=1; shift ;;
+		-*)           die "unknown option: $1" ;;
+		*)
+			[ -z "$model" ] || die "unexpected argument: $1"
+			model="$1"; shift ;;
+	esac
+done
 
-docker rm serving_base
+[ -n "$model" ] || { usage; exit 2; }
 
-rmdir empty
+case " $VALID_MODELS " in
+	*" $model "*) ;;
+	*) die "unknown model '$model'; expected one of: $VALID_MODELS" ;;
+esac
+
+# The detector image serves a model named "detector"; every translation
+# direction serves one named "translator" (the web app looks them up by port).
+if [ "$model" = detector ]; then
+	model_name=detector
+else
+	model_name=translator
+fi
+
+[ -n "$image_tag" ] || image_tag="$IMAGE_REPO:$model"
+
+# Resolve the release, and the checksum to verify the download against, from the
+# pins unless --release overrode it. Only needed when the model actually comes
+# from a release.
+expected_sha=""
+if [ -z "$model_dir" ] && [ -z "$archive" ]; then
+	pinned_release=""
+	pinned_sha=""
+	if [ -f "$MODELS_PINS" ]; then
+		pinned_release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
+		pinned_sha="$(awk -v m="$model" '$1 == m { print $3; exit }' "$MODELS_PINS")"
+	fi
+
+	if [ -n "$release" ]; then
+		# An incomplete pin line is an error on every path, not just the plain
+		# one: otherwise adding --release for the release already pinned would
+		# turn a refusal into an unverified build.
+		if [ -n "$pinned_release" ] && [ -z "$pinned_sha" ]; then
+			die "the pin for '$model' in $MODELS_PINS has no checksum column; add the sha256 of $model.tar.gz (shasum -a 256), or remove the line to build from --release unverified"
+		fi
+		# An override still gets verified when it names the release the pins
+		# already pin - which is what the documented single-model publish does -
+		# so the common case does not quietly lose its integrity check.
+		if [ "$release" = "$pinned_release" ]; then
+			expected_sha="$pinned_sha"
+			echo "==> release: $release (--release override, same as the pin; checksum verified)"
+		else
+			echo "==> release: $release (--release override; no pinned checksum for it, not verified)"
+		fi
+	else
+		[ -f "$MODELS_PINS" ] \
+			|| die "$MODELS_PINS is missing; pass --release, --archive or --model-dir"
+		[ -n "$pinned_release" ] \
+			|| die "no release pinned for '$model' in $MODELS_PINS; add a line or pass --release"
+		# A pin without a checksum would build without any integrity check and
+		# without saying so, which is worse than failing.
+		[ -n "$pinned_sha" ] \
+			|| die "the pin for '$model' in $MODELS_PINS has no checksum column; add the sha256 of $model.tar.gz (shasum -a 256) or pass --release"
+		release="$pinned_release"
+		expected_sha="$pinned_sha"
+		echo "==> release: $release (pinned in serving/models.txt)"
+	fi
+fi
+
+command -v docker >/dev/null || die "docker is not installed"
+
+# Build the context in a temporary directory so the repository stays clean and a
+# 185 MB model is never left behind on a failed build.
+ctx="$(mktemp -d)"
+# The archive is downloaded here rather than into $ctx: anything inside the
+# context is uploaded to the docker daemon, so leaving a ~153 MB .tar.gz there
+# would send the model twice.
+dl="$(mktemp -d)"
+cleanup() { rm -rf "$ctx" "$dl"; }
+trap cleanup EXIT
+
+cp "$REPO_ROOT/serving/Dockerfile" "$ctx/Dockerfile"
+
+# Resolve where the model comes from, most explicit option first.
+if [ -n "$model_dir" ]; then
+	[ -f "$model_dir/saved_model.pb" ] \
+		|| die "$model_dir does not look like a SavedModel version directory (no saved_model.pb)"
+	echo "==> model: $model_dir"
+	cp -R "$model_dir" "$ctx/0001"
+else
+	if [ -z "$archive" ]; then
+		command -v gh >/dev/null \
+			|| die "gh is required to download models; install it, or pass --archive/--model-dir"
+		echo "==> downloading $model.tar.gz from release $release"
+		gh release download "$release" --repo s-meinhardt/translators \
+			--pattern "$model.tar.gz" --dir "$dl" \
+			|| die "could not download $model.tar.gz from release $release"
+		archive="$dl/$model.tar.gz"
+	fi
+	[ -f "$archive" ] || die "archive not found: $archive"
+	echo "==> model: $archive"
+
+	# Verify what was downloaded against the pinned checksum. A release asset
+	# stays replaceable by anyone with write access, so without this the pin
+	# only names a tag, not a particular archive.
+	if [ -n "$expected_sha" ]; then
+		actual_sha="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+		if [ "$actual_sha" != "$expected_sha" ]; then
+			die "checksum mismatch for $model.tar.gz from release $release
+  expected $expected_sha (serving/models.txt)
+  got      $actual_sha
+The release asset has changed. Do not build from it until you know why."
+		fi
+		echo "==> checksum ok (sha256 ${expected_sha:0:16}...)"
+	fi
+
+	tar -xzf "$archive" -C "$ctx"
+fi
+
+[ -f "$ctx/0001/saved_model.pb" ] || die "no saved_model.pb in the resolved model; nothing to build"
+
+echo "==> building $image_tag (tensorflow/serving:$tf_serving, MODEL_NAME=$model_name, $platform)"
+docker build \
+	--platform "$platform" \
+	--build-arg "TF_SERVING_VERSION=$tf_serving" \
+	--build-arg "MODEL_NAME=$model_name" \
+	--tag "$image_tag" \
+	"$ctx"
+
+if [ "$push" -eq 1 ]; then
+	echo "==> pushing $image_tag"
+	docker push "$image_tag"
+else
+	echo "==> built $image_tag (not pushed; pass --push to push)"
+fi

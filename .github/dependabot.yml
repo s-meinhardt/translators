@@ -1,0 +1,11 @@
+# Keeps the actions used by the workflows in .github/workflows current. Python
+# dependencies in flask-app/requirements.txt are already covered by Dependabot
+# security updates; add a "pip" entry here if you also want version-update PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'ci:'
