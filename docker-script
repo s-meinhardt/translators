@@ -129,10 +129,16 @@ if [ -z "$model_dir" ] && [ -z "$archive" ]; then
 	fi
 
 	if [ -n "$release" ]; then
+		# An incomplete pin line is an error on every path, not just the plain
+		# one: otherwise adding --release for the release already pinned would
+		# turn a refusal into an unverified build.
+		if [ -n "$pinned_release" ] && [ -z "$pinned_sha" ]; then
+			die "the pin for '$model' in $MODELS_PINS has no checksum column; add the sha256 of $model.tar.gz (shasum -a 256), or remove the line to build from --release unverified"
+		fi
 		# An override still gets verified when it names the release the pins
 		# already pin - which is what the documented single-model publish does -
 		# so the common case does not quietly lose its integrity check.
-		if [ "$release" = "$pinned_release" ] && [ -n "$pinned_sha" ]; then
+		if [ "$release" = "$pinned_release" ]; then
 			expected_sha="$pinned_sha"
 			echo "==> release: $release (--release override, same as the pin; checksum verified)"
 		else
