@@ -27,6 +27,8 @@
 #                      do not need it: the pins already say which release each
 #                      model is live in, so a rebuild of all seven picks the
 #                      right archive per model even after one was retrained.
+#                      An override skips the checksum check, since the pins
+#                      hold no checksum for an archive they do not name.
 #   --tf-serving VER   tensorflow/serving tag to base the image on
 #                      (default: $TF_SERVING_VERSION, else TF_SERVING_DEFAULT
 #                      below). See docs/models.md for which versions are known
@@ -39,7 +41,12 @@
 #   -h, --help         Show this help.
 #
 # Without --model-dir or --archive, the script downloads <model>.tar.gz from the
-# release that serving/models.txt pins this model to.
+# release that serving/models.txt pins this model to, and verifies it against
+# the checksum pinned there.
+#
+# Note that the "serving images" workflow runs this from the ref it was
+# dispatched on - the default branch unless dispatched with --ref - so a pin
+# change has to reach master before a rebuild will honour it.
 #
 # Examples:
 #   ./docker-script de-en
@@ -107,15 +114,24 @@ fi
 
 [ -n "$image_tag" ] || image_tag="$IMAGE_REPO:$model"
 
-# Resolve the release from the pins unless --release overrode it. Only needed
-# when the model actually comes from a release.
-if [ -z "$release" ] && [ -z "$model_dir" ] && [ -z "$archive" ]; then
-	[ -f "$MODELS_PINS" ] \
-		|| die "$MODELS_PINS is missing; pass --release, --archive or --model-dir"
-	release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
-	[ -n "$release" ] \
-		|| die "no release pinned for '$model' in $MODELS_PINS; add a line or pass --release"
-	echo "==> release: $release (pinned in serving/models.txt)"
+# Resolve the release, and the checksum to verify the download against, from the
+# pins unless --release overrode it. Only needed when the model actually comes
+# from a release.
+expected_sha=""
+if [ -z "$model_dir" ] && [ -z "$archive" ]; then
+	if [ -n "$release" ]; then
+		# An explicit --release names an archive the pins say nothing about, so
+		# there is no pinned checksum to check it against.
+		echo "==> release: $release (--release override; checksum not verified)"
+	else
+		[ -f "$MODELS_PINS" ] \
+			|| die "$MODELS_PINS is missing; pass --release, --archive or --model-dir"
+		release="$(awk -v m="$model" '$1 == m { print $2; exit }' "$MODELS_PINS")"
+		expected_sha="$(awk -v m="$model" '$1 == m { print $3; exit }' "$MODELS_PINS")"
+		[ -n "$release" ] \
+			|| die "no release pinned for '$model' in $MODELS_PINS; add a line or pass --release"
+		echo "==> release: $release (pinned in serving/models.txt)"
+	fi
 fi
 
 command -v docker >/dev/null || die "docker is not installed"
@@ -150,6 +166,21 @@ else
 	fi
 	[ -f "$archive" ] || die "archive not found: $archive"
 	echo "==> model: $archive"
+
+	# Verify what was downloaded against the pinned checksum. A release asset
+	# stays replaceable by anyone with write access, so without this the pin
+	# only names a tag, not a particular archive.
+	if [ -n "$expected_sha" ]; then
+		actual_sha="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+		if [ "$actual_sha" != "$expected_sha" ]; then
+			die "checksum mismatch for $model.tar.gz from release $release
+  expected $expected_sha (serving/models.txt)
+  got      $actual_sha
+The release asset has changed. Do not build from it until you know why."
+		fi
+		echo "==> checksum ok (sha256 ${expected_sha:0:16}...)"
+	fi
+
 	tar -xzf "$archive" -C "$ctx"
 fi
 

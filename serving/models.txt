@@ -1,4 +1,5 @@
-# Which release each serving image's model is built from.
+# Which release each serving image's model is built from, and the SHA-256 of
+# that release asset.
 #
 # The models are not in git (see docs/models.md), so this file is where the
 # repository records which archive is live for each image. docker-script reads
@@ -6,14 +7,20 @@
 # all seven images picks up the right archive per model even after one of them
 # has been retrained into a new release.
 #
-# Retraining updates one line here: scripts/package-model.sh does it for you
-# after a successful upload, and the change is then a reviewable one-line diff.
+# The checksum is verified after download. Release assets stay mutable for
+# anyone with write access to the repository, so this is what makes the pin a
+# statement about a specific archive rather than just a tag.
 #
-# <model>   <release tag>
-detector    models-v1
-de-en       models-v1
-en-de       models-v1
-de-fr       models-v1
-fr-de       models-v1
-en-fr       models-v1
-fr-en       models-v1
+# Retraining updates one line here: scripts/package-model.sh does it for you
+# after a successful upload. Commit it AND get it onto master - the workflow
+# reads this file from the ref it was dispatched on, which is the default
+# branch unless you pass --ref.
+#
+# <model>   <release>   <sha256 of <model>.tar.gz>
+detector    models-v1   6032587fe92a3dc7ecde637d0c43ce9f98eeff557075c78069532a75f8747505
+de-en       models-v1   b56a6a6c8ceef65fb9b1097fcd8062719030659afcb8b509c488f266165dbc27
+en-de       models-v1   3c1504be085260757ca3ba41432267890dd780670b2e4dec1e2961a547cabe09
+de-fr       models-v1   81a047ae22aff4626b37ae86533131723e586678ae835c10bd841ddc0bcacb8f
+fr-de       models-v1   799bb7f32b8308896812984b7af5c34c4ce68312f52dbe6c27330932235c934d
+en-fr       models-v1   9d972406a2df1547626b8d090f5822b773ab8afe991df1173fe59adbae0e2468
+fr-en       models-v1   87f438ece35018662083194c98f31d8b74b81343a62991c84d7174f5f2921299

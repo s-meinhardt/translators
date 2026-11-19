@@ -97,26 +97,37 @@ if [ -n "$release" ]; then
 			--title "Trained models ${release#models-}" \
 			--notes "Model archives for the meinhardt4ai/translators serving images. See docs/models.md."
 	fi
-	# Record which release this model is now live in, so a later rebuild of all
-	# seven images picks up the new archive for this one and the old archives for
-	# the rest. Without this the next base-image rebuild would quietly revert it.
+	# Record which release this model is now live in, and the checksum of the
+	# archive, so a later rebuild of all seven images picks up the new archive
+	# for this one and the old archives for the rest. Without this the next
+	# base-image rebuild would quietly revert it.
 	pins="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/serving/models.txt"
 	if [ -f "$pins" ]; then
+		sha="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
 		tmp="$(mktemp)"
-		awk -v m="$model" -v r="$release" \
-			'$1 == m { printf "%-11s %s\n", m, r; next } { print }' "$pins" > "$tmp"
-		if cmp -s "$pins" "$tmp"; then
-			rm -f "$tmp"
-			echo "==> serving/models.txt already pins $model to $release"
-		else
+		# A model with no line yet has to be appended; rewriting in place would
+		# silently change nothing and report success.
+		if awk -v m="$model" '$1 == m { found = 1 } END { exit !found }' "$pins"; then
+			awk -v m="$model" -v r="$release" -v h="$sha" \
+				'$1 == m { printf "%-11s %-11s %s\n", m, r, h; next } { print }' \
+				"$pins" > "$tmp"
 			mv "$tmp" "$pins"
 			echo "==> updated serving/models.txt: $model -> $release"
-			echo "    commit that one-line change so the repository records it."
+		else
+			rm -f "$tmp"
+			printf '%-11s %-11s %s\n' "$model" "$release" "$sha" >> "$pins"
+			echo "==> added $model to serving/models.txt -> $release"
 		fi
+		echo "    Commit it AND get it onto master: the 'serving images' workflow"
+		echo "    reads this file from the ref it is dispatched on, which is the"
+		echo "    default branch unless you pass --ref."
 	else
 		echo "==> note: $pins not found; pin $model to $release by hand"
 	fi
 
 	echo "==> now rebuild the image on GitHub:"
-	echo "    gh workflow run 'serving images' -f models=$model -f push=true"
+	# --release is kept explicit here: it is correct for this one model whether
+	# or not the pin change has reached master yet.
+	echo "    gh workflow run 'serving images' \\"
+	echo "        -f models=$model -f release=$release -f push=true"
 fi

@@ -85,8 +85,13 @@ jobs:
           echo "web app served / and rendered the translator page"
           docker rm -f web_app_smoke > /dev/null
 
+      # Both the login and the push require master, not just "not a pull
+      # request". workflow_dispatch lets you pick any branch, and without the
+      # ref check a dispatch from a feature branch would publish that branch's
+      # code as :web_app - the tag translator.yml deploys. A dispatch from
+      # another branch still builds and smoke-tests, which is the useful part.
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -95,7 +100,7 @@ jobs:
       # web_app is the tag translator.yml references; the sha tag is there to
       # roll back to a known-good build without rebuilding it.
       - name: Push web_app image
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: |
           set -euo pipefail
           sha_tag="$IMAGE:web_app-${GITHUB_SHA::7}"

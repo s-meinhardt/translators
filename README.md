@@ -26,7 +26,7 @@ The seven serving images each carry one trained model baked into it. The models 
 | [translator_de_en.ipynb](translator_de_en.ipynb) | Jupyter notebook to train a translator model. |
 | [docker-script](docker-script) | Builds (and optionally pushes) one `tensorflow/serving` image from an archived model, tagged `meinhardt4ai/translators:<name>`. |
 | [serving/Dockerfile](serving/Dockerfile) | Dockerfile behind `docker-script`: lays one SavedModel into a `tensorflow/serving` base. |
-| [serving/models.txt](serving/models.txt) | Which release each serving image's model is built from, one line per model. |
+| [serving/models.txt](serving/models.txt) | Which release each serving image's model is built from, with its SHA-256; one line per model. |
 | [scripts/package-model.sh](scripts/package-model.sh) | Packages a freshly trained model and uploads it, ready for the serving-image workflow. |
 | [scripts/extract-models-from-images.sh](scripts/extract-models-from-images.sh) | Recovers the models from the published images. |
 | [docs/models.md](docs/models.md) | Where the trained models are archived, their signatures, and how to retrain one. |
@@ -61,10 +61,13 @@ on GitHub, so no local path ends up in the repository or in an image.
    ```bash
    scripts/package-model.sh de-en <the-saved-model-dir> --release models-v2
    ```
-3. Commit the one-line change it makes to [serving/models.txt](serving/models.txt).
-4. Rebuild and push `meinhardt4ai/translators:de-en`:
+3. Commit the one-line change it makes to [serving/models.txt](serving/models.txt)
+   **and get it onto `master`** — the workflow reads that file from the ref it is
+   dispatched on, which is the default branch unless you pass `--ref`.
+4. Rebuild and push `meinhardt4ai/translators:de-en`. Naming the release is
+   correct for a single model whether or not the pin has landed:
    ```bash
-   gh workflow run "serving images" -f models=de-en -f push=true
+   gh workflow run "serving images" -f models=de-en -f release=models-v2 -f push=true
    ```
 
 See [docs/models.md](docs/models.md) for the archive layout and the model signatures.
@@ -84,9 +87,10 @@ built from it. The seven serving images carry frozen models and are left alone.
 
 It runs on every pull request and push that touches [flask-app/](flask-app),
 builds the image, starts it and checks that the app serves its page, then pushes
-`meinhardt4ai/translators:web_app` (plus a `web_app-<sha>` tag to roll back to)
-on a push to `master`. Pull requests are built and tested but not pushed, so a
-dependabot PR is verified before it is merged.
+`meinhardt4ai/translators:web_app` (plus a `web_app-<sha>` tag to roll back to).
+Pushing requires `master`: a pull request, or a manual run from any other
+branch, is built and smoke-tested but publishes nothing, so a dependabot PR is
+verified before it is merged and unmerged code cannot reach the deployed tag.
 
 ### `serving images`
 
@@ -98,15 +102,15 @@ and publishing a retrained model. Inputs:
 |---|---|---|
 | `models` | `all` | Space-separated subset, e.g. `de-en fr-en`. |
 | `tf_serving_version` | `2.21.0` | Base image tag — see [docs/models.md](docs/models.md#tensorflowserving-version). |
-| `release` | *(empty)* | Overrides the release for every model; normally left empty so the per-model pins in [serving/models.txt](serving/models.txt) apply. |
+| `release` | *(empty)* | Overrides the release for every model; normally left empty so the per-model pins in [serving/models.txt](serving/models.txt) apply (read from the dispatched ref). |
 | `push` | `false` | Build and verify only, unless set. |
 
-Every image is started and checked for its model reaching `AVAILABLE` before it
-is pushed, so a base-image bump that breaks model loading fails the run rather
-than the server. A prediction is also attempted and reported, but only as a
-warning — see [docs/models.md](docs/models.md#tensorflowserving-version), which
-records what was verified on the current base and the one open question about
-`en-fr`.
+Every image is started and must both reach `AVAILABLE` and return a prediction
+for a real tokenised sentence before it is pushed, so a base-image bump that
+breaks model loading or inference fails the run rather than the server. Each run
+also reports which release every image was built from. See
+[docs/models.md](docs/models.md#tensorflowserving-version) for the test
+sentences and what has been verified on the current base.
 
 ### Required secrets
 

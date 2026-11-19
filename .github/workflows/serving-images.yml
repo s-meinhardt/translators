@@ -103,10 +103,20 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$RELEASE_OVERRIDE" ]; then
-            ./docker-script "$MODEL" --tf-serving "$TF_SERVING" --release "$RELEASE_OVERRIDE"
+            ./docker-script "$MODEL" --tf-serving "$TF_SERVING" --release "$RELEASE_OVERRIDE" \
+              | tee build.log
           else
-            ./docker-script "$MODEL" --tf-serving "$TF_SERVING"
+            ./docker-script "$MODEL" --tf-serving "$TF_SERVING" | tee build.log
           fi
+
+          # Say on the run page which archive the image was actually built
+          # from. This file is read from the ref the workflow was dispatched on
+          # (the default branch unless --ref), so a pin change that has not
+          # reached master yet would otherwise rebuild the old model silently.
+          rel="$(sed -n 's/^==> release: \([^ ]*\).*/\1/p' build.log | head -1)"
+          echo "- \`$MODEL\` built from release \`${rel:-unknown}\` on \`tensorflow/serving:$TF_SERVING\`" \
+            >> "$GITHUB_STEP_SUMMARY"
+          sed -n 's/^==> checksum \(.*\)/  - checksum \1/p' build.log >> "$GITHUB_STEP_SUMMARY"
 
       # A serving image that cannot load its model is useless, and that is
       # exactly what bumping the base image can break - so check it here rather
@@ -147,26 +157,38 @@ jobs:
 
           docker rm -f serving_check > /dev/null
 
-      # Advisory, not a gate. Beam search is inside the SavedModel, so how long a
-      # prediction takes depends on the model and the input, and a slow one is a
-      # pre-existing property rather than something a base-image bump caused.
-      # Reaching AVAILABLE above is the real test of the image; this just reports
-      # whether the graph actually executes on a native amd64 runner.
-      - name: Prediction check (advisory)
-        continue-on-error: true
+      # A real sentence, tokenised with the app's own vocabularies, so this is a
+      # gate rather than advice: an image that loads its model but cannot
+      # translate must not be pushed. The token ids below are whole-word
+      # lookups in flask-app/vocabularies/wmt_{en,de,fr}_32k.txt; see
+      # docs/models.md. Feeding arbitrary ids instead makes beam search wander
+      # until TensorFlow Serving's own 30 s REST timeout fires, which says
+      # nothing about the image.
+      - name: Prediction check
         env:
           MODEL: ${{ matrix.model }}
         run: |
-          set -uo pipefail
-          if [ "$MODEL" = detector ]; then
-            name=detector
-            row="$(python3 -c 'print(",".join(["0.1"] * 64))')"
-            body="{\"instances\":[[$row]]}"
-          else
-            name=translator
-            row="$(python3 -c 'print(",".join(["2", "100", "200", "300", "400", "5"] + ["0"] * 34))')"
-            body="{\"instances\":[[$row]]}"
-          fi
+          set -euo pipefail
+          case "$MODEL" in
+            detector)
+              name=detector
+              row="$(python3 -c 'print(",".join(["0.1"] * 64))')"
+              sentence='64 neutral embedding values' ;;
+            en-*)
+              name=translator
+              row='6868,7272,16,2414,1751,1874,35'
+              sentence='Good morning , how are you ?' ;;
+            de-*)
+              name=translator
+              row='19174,6793,16,1956,3364,1922,2794,35'
+              sentence='Guten Morgen , wie geht es dir ?' ;;
+            fr-*)
+              name=translator
+              row='32540,16,3423,15248,17,2114,35'
+              sentence='Bonjour , comment allez - vous ?' ;;
+            *)
+              echo "::error::no prediction input defined for $MODEL"; exit 1 ;;
+          esac
 
           docker run -d --name predict_check -p 8502:8501 "$IMAGE:$MODEL" > /dev/null
           for _ in $(seq 1 60); do
@@ -177,18 +199,21 @@ jobs:
           done
 
           start=$(date +%s)
-          out=$(curl -sS --max-time 300 -H 'Content-Type: application/json' \
-            -d "$body" "http://localhost:8502/v1/models/$name:predict" 2>&1 || true)
+          out=$(curl -sS --max-time 120 -H 'Content-Type: application/json' \
+            -d "{\"instances\":[[$row]]}" \
+            "http://localhost:8502/v1/models/$name:predict" 2>&1 || true)
           took=$(( $(date +%s) - start ))
+          docker logs predict_check > predict_check.log 2>&1 || true
           docker rm -f predict_check > /dev/null
 
           case "$out" in
             *predictions*)
-              echo "- $MODEL: prediction OK in ${took}s" >> "$GITHUB_STEP_SUMMARY"
+              echo "- $MODEL: predicted on \"$sentence\" in ${took}s" >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
-              echo "::warning::$MODEL served its model but a prediction did not return in ${took}s: ${out:0:200}"
-              echo "- $MODEL: prediction did NOT return (${took}s)" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$MODEL loaded its model but could not predict on \"$sentence\" (${took}s): ${out:0:300}"
+              tail -30 predict_check.log
+              exit 1
               ;;
           esac
 
